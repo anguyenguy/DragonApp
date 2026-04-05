@@ -2,3 +2,4 @@ clip_env/
 env/
 video/
 save/*
+!save/.gitkeep
