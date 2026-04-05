@@ -14,6 +14,14 @@ model, preprocess = clip.load("ViT-B/32", device=device)
 img1_path = None
 img2_path = None
 
+# ===== Change Weight HERE =====
+clip_weight = 1
+phash_weight = 1
+ssim_weight = 1
+
+final_high_weight = 130
+final_medium_weight = 120
+
 # ===== Hiển thị ảnh =====
 def show_image(path, panel):
     img = Image.open(path)
@@ -84,7 +92,7 @@ def compare_images():
     s = ssim_score(img1_path, img2_path)
 
     # Weighted score (tuned cho video)
-    final = 0.4 * c + 0.3 * p + 0.3 * s
+    final = clip_weight * c + phash_weight * p + ssim_weight * s
 
     # Hiển thị
     clip_label.config(text=f"CLIP: {c:.2f}%")
@@ -96,10 +104,10 @@ def compare_images():
     if p > 85 and s > 70:
         result = "ĐÚNG (rất chắc chắn)"
         color = "green"
-    elif final > 75:
+    elif final > final_high_weight:
         result = "ĐÚNG"
         color = "green"
-    elif final > 60:
+    elif final > final_medium_weight:
         result = "NGHI NGỜ"
         color = "orange"
     else:
