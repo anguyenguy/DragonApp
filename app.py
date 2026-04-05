@@ -1,153 +1,221 @@
 import tkinter as tk
-from tkinter import filedialog
-from PIL import Image, ImageTk
+from tkinter import filedialog, ttk
+import cv2
+import numpy as np
+from PIL import Image
+import imagehash
+from skimage.metrics import structural_similarity as ssim
 import torch
 import clip
-import cv2
-from skimage.metrics import structural_similarity as ssim
-import imagehash
+import csv
 
-# ===== Load CLIP =====
+# ===== LOAD CLIP =====
 device = "cuda" if torch.cuda.is_available() else "cpu"
 model, preprocess = clip.load("ViT-B/32", device=device)
 
-img1_path = None
-img2_path = None
+review_path = None
+original_path = None
 
-# ===== Change Weight HERE =====
-clip_weight = 1
-phash_weight = 1
-ssim_weight = 1
+# ===== CHỌN FILE =====
+def choose_review():
+    global review_path
+    review_path = filedialog.askopenfilename()
+    review_label.config(text=review_path)
 
-final_high_weight = 130
-final_medium_weight = 120
+def choose_original():
+    global original_path
+    original_path = filedialog.askopenfilename()
+    original_label.config(text=original_path)
 
-# ===== Hiển thị ảnh =====
-def show_image(path, panel):
-    img = Image.open(path)
-    img = img.resize((200, 200))
-    img = ImageTk.PhotoImage(img)
-    panel.config(image=img)
-    panel.image = img
+# ===== EXTRACT FRAME =====
+def extract_frames(video_path, interval_sec):
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    interval = int(fps * interval_sec)
 
-# ===== Chọn ảnh =====
-def choose_img1():
-    global img1_path
-    img1_path = filedialog.askopenfilename()
-    show_image(img1_path, panel1)
+    frames, timestamps = [], []
+    frame_count = 0
 
-def choose_img2():
-    global img2_path
-    img2_path = filedialog.askopenfilename()
-    show_image(img2_path, panel2)
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
 
-# ===== CLIP =====
-def clip_score(p1, p2):
-    image1 = preprocess(Image.open(p1)).unsqueeze(0).to(device)
-    image2 = preprocess(Image.open(p2)).unsqueeze(0).to(device)
+        if frame_count % interval == 0:
+            frames.append(frame)
+            timestamps.append(frame_count / fps)
 
-    with torch.no_grad():
-        f1 = model.encode_image(image1)
-        f2 = model.encode_image(image2)
+        frame_count += 1
 
-    f1 = f1 / f1.norm(dim=-1, keepdim=True)
-    f2 = f2 / f2.norm(dim=-1, keepdim=True)
-
-    return (f1 @ f2.T).item() * 100
+    cap.release()
+    return frames, timestamps
 
 # ===== pHash =====
-def phash_score(p1, p2):
-    h1 = imagehash.phash(Image.open(p1))
-    h2 = imagehash.phash(Image.open(p2))
-
-    dist = h1 - h2  # càng nhỏ càng giống
-    score = max(0, 100 - dist * 5)  # scale về %
-    return score
+def compute_phash(frames):
+    hashes = []
+    for f in frames:
+        img = Image.fromarray(cv2.cvtColor(f, cv2.COLOR_BGR2RGB))
+        hashes.append(imagehash.phash(img))
+    return hashes
 
 # ===== SSIM =====
-def ssim_score(p1, p2):
-    img1 = cv2.imread(p1)
-    img2 = cv2.imread(p2)
+def ssim_score(f1, f2):
+    f1 = cv2.resize(f1, (256, 256))
+    f2 = cv2.resize(f2, (256, 256))
+    g1 = cv2.cvtColor(f1, cv2.COLOR_BGR2GRAY)
+    g2 = cv2.cvtColor(f2, cv2.COLOR_BGR2GRAY)
+    score, _ = ssim(g1, g2, full=True)
+    return score
 
-    img1 = cv2.resize(img1, (256, 256))
-    img2 = cv2.resize(img2, (256, 256))
+# ===== CLIP =====
+def clip_score(f1, f2):
+    i1 = preprocess(Image.fromarray(cv2.cvtColor(f1, cv2.COLOR_BGR2RGB))).unsqueeze(0).to(device)
+    i2 = preprocess(Image.fromarray(cv2.cvtColor(f2, cv2.COLOR_BGR2RGB))).unsqueeze(0).to(device)
 
-    gray1 = cv2.cvtColor(img1, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    with torch.no_grad():
+        f1_feat = model.encode_image(i1)
+        f2_feat = model.encode_image(i2)
 
-    gray1 = cv2.GaussianBlur(gray1, (5,5), 0)
-    gray2 = cv2.GaussianBlur(gray2, (5,5), 0)
+    f1_feat /= f1_feat.norm(dim=-1, keepdim=True)
+    f2_feat /= f2_feat.norm(dim=-1, keepdim=True)
 
-    score, _ = ssim(gray1, gray2, full=True)
-    return score * 100
+    return (f1_feat @ f2_feat.T).item()
 
-# ===== Combine =====
-def compare_images():
-    if not img1_path or not img2_path:
-        result_label.config(text="Chọn đủ 2 ảnh", fg="orange")
+# ===== CONVERT TIME =====
+def sec_to_hms(sec):
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    s = int(sec % 60)
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+# ===== SAVE CSV =====
+def save_csv(results):
+    path = filedialog.asksaveasfilename(defaultextension=".csv")
+    if not path:
         return
 
-    c = clip_score(img1_path, img2_path)
-    p = phash_score(img1_path, img2_path)
-    s = ssim_score(img1_path, img2_path)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
 
-    # Weighted score (tuned cho video)
-    final = clip_weight * c + phash_weight * p + ssim_weight * s
+        # Header
+        writer.writerow([
+            "Review Time (s)",
+            "Review Time (HH:MM:SS)",
+            "Original Time (s)",
+            "Original Time (HH:MM:SS)",
+            "pHash Dist",
+            "SSIM",
+            "CLIP"
+        ])
 
-    # Hiển thị
-    clip_label.config(text=f"CLIP: {c:.2f}%")
-    phash_label.config(text=f"pHash: {p:.2f}%")
-    ssim_label.config(text=f"SSIM: {s:.2f}%")
-    final_label.config(text=f"FINAL: {final:.2f}%")
+        for r in results:
+            review_s = r[0]
+            original_s = r[1]
 
-    # Decision logic (smart hơn)
-    if p > 85 and s > 70:
-        result = "ĐÚNG (rất chắc chắn)"
-        color = "green"
-    elif final > final_high_weight:
-        result = "ĐÚNG"
-        color = "green"
-    elif final > final_medium_weight:
-        result = "NGHI NGỜ"
-        color = "orange"
-    else:
-        result = "SAI"
-        color = "red"
+            writer.writerow([
+                review_s,
+                sec_to_hms(review_s),
+                original_s,
+                sec_to_hms(original_s),
+                r[2],
+                r[3],
+                r[4]
+            ])
 
-    result_label.config(text=result, fg=color)
+# ===== MATCH =====
+def match_videos():
+    if not review_path or not original_path:
+        result_box.insert(tk.END, "Chọn đủ 2 video\n")
+        return
+
+    interval = float(interval_entry.get())
+
+    result_box.delete(1.0, tk.END)
+
+    result_box.insert(tk.END, "Extract frame...\n")
+    review_frames, review_ts = extract_frames(review_path, interval)
+    original_frames, original_ts = extract_frames(original_path, interval)
+
+    result_box.insert(tk.END, "Compute pHash...\n")
+    original_hashes = compute_phash(original_frames)
+
+    results = []
+
+    total = len(review_frames)
+    progress_bar["maximum"] = total
+
+    for i, frame in enumerate(review_frames):
+        # pHash
+        q_hash = imagehash.phash(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)))
+
+        best_idx = -1
+        best_dist = 999
+
+        for j, h in enumerate(original_hashes):
+            dist = q_hash - h
+            if dist < best_dist:
+                best_dist = dist
+                best_idx = j
+
+        # SSIM refine
+        best_ssim = -1
+        final_idx = best_idx
+
+        for j in range(max(0, best_idx-2), min(len(original_frames), best_idx+3)):
+            s = ssim_score(frame, original_frames[j])
+            if s > best_ssim:
+                best_ssim = s
+                final_idx = j
+
+        # CLIP
+        c_score = clip_score(frame, original_frames[final_idx])
+
+        results.append((
+            round(review_ts[i], 2),
+            round(original_ts[final_idx], 2),
+            int(best_dist),
+            round(best_ssim, 3),
+            round(c_score, 3)
+        ))
+
+        result_box.insert(
+            tk.END,
+            f"{review_ts[i]:.2f}s → {original_ts[final_idx]:.2f}s\n"
+        )
+
+        # progress
+        progress_bar["value"] = i + 1
+        progress_label.config(text=f"{i+1} / {total}")
+        root.update_idletasks()
+
+    save_csv(results)
 
 # ===== GUI =====
 root = tk.Tk()
-root.title("So sánh ảnh (CLIP + pHash + SSIM)")
+root.title("Video Matching Tool (Final)")
 
-btn1 = tk.Button(root, text="Chọn ảnh 1", command=choose_img1)
-btn1.grid(row=0, column=0)
+tk.Button(root, text="Chọn video review", command=choose_review).pack()
+review_label = tk.Label(root, text="Chưa chọn")
+review_label.pack()
 
-btn2 = tk.Button(root, text="Chọn ảnh 2", command=choose_img2)
-btn2.grid(row=0, column=1)
+tk.Button(root, text="Chọn video original", command=choose_original).pack()
+original_label = tk.Label(root, text="Chưa chọn")
+original_label.pack()
 
-panel1 = tk.Label(root)
-panel1.grid(row=1, column=0)
+tk.Label(root, text="Interval (giây):").pack()
+interval_entry = tk.Entry(root)
+interval_entry.insert(0, "1")
+interval_entry.pack()
 
-panel2 = tk.Label(root)
-panel2.grid(row=1, column=1)
+tk.Button(root, text="Run Matching", command=match_videos).pack()
 
-compare_btn = tk.Button(root, text="So sánh", command=compare_images)
-compare_btn.grid(row=2, column=0, columnspan=2)
+progress_label = tk.Label(root, text="0 / 0")
+progress_label.pack()
 
-clip_label = tk.Label(root, text="CLIP:")
-clip_label.grid(row=3, column=0, columnspan=2)
+progress_bar = ttk.Progressbar(root, orient="horizontal", length=400, mode="determinate")
+progress_bar.pack()
 
-phash_label = tk.Label(root, text="pHash:")
-phash_label.grid(row=4, column=0, columnspan=2)
-
-ssim_label = tk.Label(root, text="SSIM:")
-ssim_label.grid(row=5, column=0, columnspan=2)
-
-final_label = tk.Label(root, text="FINAL:", font=("Arial", 12))
-final_label.grid(row=6, column=0, columnspan=2)
-
-result_label = tk.Label(root, text="Kết quả", font=("Arial", 16))
-result_label.grid(row=7, column=0, columnspan=2)
+result_box = tk.Text(root, height=15)
+result_box.pack()
 
 root.mainloop()
