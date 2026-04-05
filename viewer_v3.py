@@ -218,34 +218,66 @@ def load_session():
     with open(path) as f:
         session = json.load(f)
 
-    review_video = session["review_video"]
-    original_video = session["original_video"]
-    csv_path = session["csv_path"]
+    # ===== restore basic info =====
+    review_video = session.get("review_video")
+    original_video = session.get("original_video")
+    csv_path = session.get("csv_path")
 
-    review_label.config(text=review_video)
-    original_label.config(text=original_video)
+    review_label.config(text=review_video if review_video else "")
+    original_label.config(text=original_video if original_video else "")
 
     col_review_entry.delete(0, tk.END)
-    col_review_entry.insert(0, session["col_review"])
+    col_review_entry.insert(0, session.get("col_review", 1))
 
     col_original_entry.delete(0, tk.END)
-    col_original_entry.insert(0, session["col_original"])
+    col_original_entry.insert(0, session.get("col_original", 2))
 
-    # load lại CSV
-    load_csv()
+    # ===== load lại CSV =====
+    if not csv_path or not os.path.exists(csv_path):
+        print("CSV không tồn tại, vui lòng chọn lại")
+        return
 
-    selections = session["selections"]
-    overrides = session["overrides"]
+    # load CSV thủ công (tránh gọi filedialog lại)
+    col_r = int(col_review_entry.get()) - 1
+    col_o = int(col_original_entry.get()) - 1
 
+    data.clear()
+
+    with open(csv_path, newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader, None)
+
+        for row in reader:
+            try:
+                r = float(row[col_r])
+                o = float(row[col_o])
+                data.append((r, o))
+            except:
+                continue
+
+    # render lại UI
+    render()
+
+    # ===== restore selections & overrides =====
+    saved_selections = session.get("selections", [])
+    saved_overrides = session.get("overrides", {})
+
+    # lọc index hợp lệ
+    selections = [i for i in saved_selections if i < len(rows)]
+    overrides = {k: v for k, v in saved_overrides.items() if int(k) < len(rows)}
+
+    # set checkbox
     for i in selections:
         rows[i]["var"].set(1)
 
+    # set override
     for k, v in overrides.items():
         idx = int(k)
         rows[idx]["entry"].delete(0, tk.END)
         rows[idx]["entry"].insert(0, str(v))
         rows[idx]["entry"].config(bg="#fff3a0")
 
+    # update lại trạng thái START / END
     update_states()
 
 # ===== export =====
