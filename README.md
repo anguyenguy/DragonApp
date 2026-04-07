@@ -15,4 +15,4 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 ### CLIP
 pip install git+https://github.com/openai/CLIP.git
 ### GUI + xử lý ảnh
-pip install torch torchvision pillow opencv-python scikit-image imagehash numpy
+pip install torch torchvision pillow opencv-python scikit-image imagehash numpy PyQt5
