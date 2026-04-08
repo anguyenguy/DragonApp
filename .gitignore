@@ -1,6 +1,6 @@
 clip_env/
 env/
-video/
+input/
 save/*
 !save/.gitkeep
 clips/*
