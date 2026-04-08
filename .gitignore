@@ -3,3 +3,6 @@ env/
 video/
 save/*
 !save/.gitkeep
+clips/*
+!clips/.gitkeep
+
